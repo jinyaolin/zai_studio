@@ -1,0 +1,28 @@
+{
+  "id": "J31kb14CG63A",
+  "workSlug": "雨夜來客",
+  "title": "這個角色最大的內在矛盾是什麼？給我一句話就好。",
+  "messages": [
+    {
+      "id": "YzgG4hBkFMVK",
+      "role": "user",
+      "content": "這個角色最大的內在矛盾是什麼？給我一句話就好。",
+      "mode": "brainstorm",
+      "createdAt": "2026-06-15T07:07:46.391Z"
+    },
+    {
+      "id": "fkbgNc1Sco6I",
+      "role": "assistant",
+      "content": "他以文字安身立命，卻用一輩子的沉默，埋葬了自己唯一寫不出來的故事。",
+      "mode": "brainstorm",
+      "createdAt": "2026-06-15T07:08:45.242Z"
+    }
+  ],
+  "scope": {
+    "kind": "memory",
+    "memoryKind": "characters",
+    "itemId": "c5iB3KflMC"
+  },
+  "createdAt": "2026-06-15T07:07:46.391Z",
+  "updatedAt": "2026-06-15T07:08:45.242Z"
+}

@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --reader-bg: theme(colors.stone.50);
+  --reader-fg: theme(colors.stone.900);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: theme(fontFamily.sans);
+  background: theme(colors.stone.50);
+  color: theme(colors.stone.900);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Reader typography: serif, generous line-height */
+.prose-reader {
+  font-family: theme(fontFamily.serif);
+  font-size: 1.125rem;
+  line-height: 1.9;
+  color: theme(colors.stone.800);
+}
+
+.prose-reader p {
+  margin: 1.25em 0;
+  text-indent: 2em;
+}
+
+.prose-reader p:first-of-type {
+  text-indent: 0;
+}
+
+.prose-reader h1,
+.prose-reader h2,
+.prose-reader h3 {
+  font-weight: 600;
+  margin: 1.5em 0 0.75em;
+  line-height: 1.3;
+}
+
+.prose-reader.is-listening p.is-current {
+  background: theme(colors.amber.100);
+  border-radius: 0.25em;
+  box-shadow: -0.5em 0 0 theme(colors.amber.100);
+}

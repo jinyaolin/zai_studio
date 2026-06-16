@@ -1,0 +1,26 @@
+{
+  "id": "g25iDLKpEWI4",
+  "workSlug": "雨夜來客",
+  "title": "用一句話描述沈墨",
+  "messages": [
+    {
+      "id": "pgaijVNAVmj0",
+      "role": "user",
+      "content": "用一句話描述沈墨",
+      "mode": "brainstorm",
+      "createdAt": "2026-06-15T22:54:11.927Z"
+    },
+    {
+      "id": "hjvssATKnUkr",
+      "role": "assistant",
+      "content": "一個活在左腕舊疤與身體背叛之間、連「自己」這兩個字都正在發潮的老人。",
+      "mode": "brainstorm",
+      "createdAt": "2026-06-15T22:54:14.070Z"
+    }
+  ],
+  "scope": {
+    "kind": "general"
+  },
+  "createdAt": "2026-06-15T22:54:11.927Z",
+  "updatedAt": "2026-06-15T22:54:14.070Z"
+}

@@ -1,0 +1,26 @@
+{
+  "id": "D_TMVfEH_-2F",
+  "workSlug": "雨夜來客",
+  "title": "用一句話描述沈墨",
+  "messages": [
+    {
+      "id": "mkycmgCc-4Bu",
+      "role": "user",
+      "content": "用一句話描述沈墨",
+      "mode": "brainstorm",
+      "createdAt": "2026-06-15T22:58:30.335Z"
+    },
+    {
+      "id": "7xv7qfE7V2TI",
+      "role": "assistant",
+      "content": "一個被自己的身體與傷痕先後佔領，而在七十歲的雨夜裡，才終於意識到「自己」或許從未真正住進這間屋子的人。",
+      "mode": "brainstorm",
+      "createdAt": "2026-06-15T22:58:32.654Z"
+    }
+  ],
+  "scope": {
+    "kind": "general"
+  },
+  "createdAt": "2026-06-15T22:58:30.335Z",
+  "updatedAt": "2026-06-15T22:58:32.654Z"
+}
