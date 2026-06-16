@@ -1,14 +1,9 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { isTTSConfigured, getCurrentVoice } from "@/lib/tts/provider";
-import { isGoogleConfigured } from "@/lib/auth/google-oauth";
-import {
-  loadGoogleTokens,
-  loadAISettings,
-} from "@/lib/auth/token-store";
+import { isAIConfigured, getCurrentModel } from "@/lib/ai/provider";
 import { getCurrentUserId } from "@/lib/auth/session";
 import LogoutButton from "./LogoutButton";
-import GoogleConnectCard from "./GoogleConnectCard";
 
 export const dynamic = "force-dynamic";
 
@@ -17,11 +12,7 @@ export default async function SettingsPage() {
   if (!userId) redirect("/studio/login");
 
   const ttsReady = isTTSConfigured();
-  const googleConfigured = isGoogleConfigured();
-  const [tokenData, settings] = await Promise.all([
-    loadGoogleTokens(userId),
-    loadAISettings(userId),
-  ]);
+  const aiReady = isAIConfigured();
 
   return (
     <div className="max-w-2xl mx-auto px-8 py-10">
@@ -34,13 +25,19 @@ export default async function SettingsPage() {
       <h1 className="font-serif text-3xl mb-8">設定</h1>
 
       <section className="space-y-4">
-        <h2 className="font-serif text-xl text-stone-700">AI 模型（Gemini）</h2>
-        <GoogleConnectCard
-          configured={googleConfigured}
-          connected={tokenData !== null}
-          email={tokenData?.userInfo.email ?? null}
-          geminiModel={settings.geminiModel ?? null}
-        />
+        <h2 className="font-serif text-xl text-stone-700">AI 模型</h2>
+        <dl className="grid grid-cols-[120px_1fr] gap-y-2 text-sm">
+          <dt className="text-stone-500">狀態</dt>
+          <dd>{aiReady ? "✓ 已設定" : "✗ 未設定"}</dd>
+          <dt className="text-stone-500">Provider</dt>
+          <dd><code>z.ai</code>（server 統一付費）</dd>
+          <dt className="text-stone-500">模型</dt>
+          <dd><code>{aiReady ? getCurrentModel() : "—"}</code></dd>
+        </dl>
+        <p className="text-xs text-stone-500">
+          所有 AI 功能（chat / Design Thinking / 記憶擷取）都走 server 的 z.ai key，
+          不需使用者設定。要換 model 請改 <code>.env</code> 的 <code>ZAI_MODEL</code>。
+        </p>
       </section>
 
       <hr className="my-8 border-stone-200" />
