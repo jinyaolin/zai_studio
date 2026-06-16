@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createWork } from "@/lib/content/works";
 import { syncWork } from "@/lib/content/sync";
 import { listWorks } from "@/lib/content/works";
+import { getCurrentUserId } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -15,17 +16,23 @@ const CreateBody = z.object({
 });
 
 export async function GET() {
-  const works = await listWorks();
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  const works = await listWorks(userId);
   return NextResponse.json({ works });
 }
 
 export async function POST(req: NextRequest) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const body = await req.json().catch(() => null);
   const parsed = CreateBody.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const work = await createWork(parsed.data);
-  await syncWork(work.slug);
+  const work = await createWork(userId, parsed.data);
+  await syncWork(userId, work.slug);
   return NextResponse.json({ work }, { status: 201 });
 }

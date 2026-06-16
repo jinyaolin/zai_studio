@@ -5,6 +5,7 @@ import { syncWork } from "@/lib/content/sync";
 import { deleteWorkRow } from "@/lib/content/db";
 import { normalizeNarration } from "@/lib/tts/narration-server";
 import { decodeParam } from "@/lib/utils/params";
+import { getCurrentUserId } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +27,12 @@ const PatchBody = z.object({
 });
 
 export async function GET(_req: NextRequest, { params }: { params: { slug: string } }) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const slug = decodeParam(params.slug);
   try {
-    const work = await readWork(slug);
+    const work = await readWork(userId, slug);
     return NextResponse.json({ work });
   } catch {
     return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -36,6 +40,9 @@ export async function GET(_req: NextRequest, { params }: { params: { slug: strin
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: { slug: string } }) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const slug = decodeParam(params.slug);
   const body = await req.json().catch(() => null);
   const parsed = PatchBody.safeParse(body);
@@ -46,7 +53,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { slug: stri
   let work;
   let renamedTo: string | undefined;
   if (data.status) {
-    work = await updateWorkStatus(slug, data.status);
+    work = await updateWorkStatus(userId, slug, data.status);
   }
   const patch: Record<string, unknown> = { ...data };
   delete patch.status;
@@ -58,19 +65,22 @@ export async function PATCH(req: NextRequest, { params }: { params: { slug: stri
     patch.narration = normalizeNarration(patch.narration as z.infer<typeof NarrationBody>);
   }
   if (Object.keys(patch).length > 0) {
-    const result = await updateWork(slug, patch);
+    const result = await updateWork(userId, slug, patch);
     renamedTo = result.renamedTo;
     const { renamedTo: _drop, ...rest } = result;
     work = rest;
   }
-  if (!work) work = await readWork(renamedTo ?? slug);
-  await syncWork(renamedTo ?? slug);
+  if (!work) work = await readWork(userId, renamedTo ?? slug);
+  await syncWork(userId, renamedTo ?? slug);
   return NextResponse.json({ work, renamedTo: renamedTo ?? null });
 }
 
 export async function DELETE(_req: NextRequest, { params }: { params: { slug: string } }) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const slug = decodeParam(params.slug);
-  await deleteWork(slug);
-  deleteWorkRow(slug);
+  await deleteWork(userId, slug);
+  deleteWorkRow(userId, slug);
   return NextResponse.json({ ok: true });
 }

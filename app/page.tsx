@@ -1,10 +1,12 @@
 import Link from "next/link";
-import { queryWorksByStatus } from "@/lib/content/db";
+import { queryAllPublishedWorks } from "@/lib/content/db";
 
 export const dynamic = "force-dynamic";
 
+// Public landing page. Lists recently-published works across ALL authors.
+// (P5: once /works/<handle>/<slug> URLs are wired, this list links there.)
 export default function HomePage() {
-  const published = queryWorksByStatus("published");
+  const published = queryAllPublishedWorks();
   const hasAny = published.length > 0;
 
   return (

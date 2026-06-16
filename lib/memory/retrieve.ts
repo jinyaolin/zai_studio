@@ -38,6 +38,7 @@ export function retrieveRelevantMemory(
 // Embedding-based retrieval. Falls back to keyword matching if no vectors
 // exist yet for this work (e.g. memory written before embeddings shipped).
 export async function retrieveRelevantMemoryWithEmbeddings(
+  userId: string,
   workSlug: string,
   memory: WorkMemory,
   message: string,
@@ -45,7 +46,7 @@ export async function retrieveRelevantMemoryWithEmbeddings(
 ): Promise<{ characters: Character[]; world: WorldEntry[]; plot: PlotThread[]; refs: MemoryRef[]; source: "vectors" | "keyword" }> {
   const topK = options?.topK ?? 6;
   try {
-    const hits = await retrieveByQuery(workSlug, message, topK);
+    const hits = await retrieveByQuery(userId, workSlug, message, topK);
     if (hits.length > 0) {
       const characters: Character[] = [];
       const world: WorldEntry[] = [];

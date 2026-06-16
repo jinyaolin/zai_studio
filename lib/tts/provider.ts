@@ -131,6 +131,7 @@ export function getTTSProvider(): TTSProvider {
 // Splits chapter text → per-paragraph synthesis → cached mp3 files.
 // Provider-agnostic; the voice string is opaque to this layer.
 export async function ensureChunk(
+  userId: string,
   workSlug: string,
   chapterSlug: string,
   index: number,
@@ -138,8 +139,8 @@ export async function ensureChunk(
   text: string,
   opts?: SynthesizeOptions,
 ): Promise<AudioChunk> {
-  const filePath = audioChunkPath(workSlug, chapterSlug, index, voice);
-  const publicUrl = `/audio/${workSlug}/${chapterSlug}/${voice}/${index}.mp3`;
+  const filePath = audioChunkPath(userId, workSlug, chapterSlug, index, voice);
+  const publicUrl = `/audio/${userId}/${workSlug}/${chapterSlug}/${voice}/${index}.mp3`;
   try {
     await fs.access(filePath);
     return { index, text, url: publicUrl, cached: true };

@@ -18,6 +18,7 @@ export interface PreparedPrompt {
 }
 
 interface PrepareArgs {
+  userId: string;
   workSlug: string;
   memory: WorkMemory;
   history: ChatMessage[];
@@ -37,7 +38,7 @@ interface PrepareArgs {
 //   - chapter: focused on ONE chapter; chapter markdown included
 //   - design:  handled separately by lib/design/prompt.ts
 export async function preparePrompt(args: PrepareArgs): Promise<PreparedPrompt> {
-  const { workSlug, memory, history, workTitle, mode, scope } = args;
+  const { userId, workSlug, memory, history, workTitle, mode, scope } = args;
 
   let systemPrompt: string;
   let retrievalSource: PreparedPrompt["retrievalSource"] = "none";
@@ -54,6 +55,7 @@ export async function preparePrompt(args: PrepareArgs): Promise<PreparedPrompt> 
     // Use the most recent user message as the retrieval query.
     const lastUser = [...history].reverse().find((m) => m.role === "user");
     systemPrompt = await buildChapterSystemPrompt({
+      userId,
       workSlug,
       workTitle,
       chapter: args.chapter,
@@ -72,7 +74,7 @@ export async function preparePrompt(args: PrepareArgs): Promise<PreparedPrompt> 
     } else {
       const lastUser = [...history].reverse().find((m) => m.role === "user");
       const message = lastUser?.content ?? "";
-      const relevant = await retrieveRelevantMemoryWithEmbeddings(workSlug, memory, message);
+      const relevant = await retrieveRelevantMemoryWithEmbeddings(userId, workSlug, memory, message);
       memorySummary = summarizeMemoryForPrompt({
         style: memory.style,
         characters: relevant.characters,

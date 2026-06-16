@@ -11,6 +11,7 @@ import { readSession, updateStage, writeSession } from "./session";
 const STAGE_INDEX_TO_NAME: DesignStageName[] = ["directions", "intent", "details", "draft"];
 
 export interface GenerateStageContext {
+  userId: string;
   workSlug: string;
   sessionId: string;
   stageIndex: number;
@@ -18,27 +19,27 @@ export interface GenerateStageContext {
 
 // Load whatever context the stage prompt needs (memory, chapters, work title).
 // Re-read per call so auto-continue picks up the freshest state between stages.
-async function loadContext(workSlug: string, session: DesignSession, stageIndex: number) {
-  const memory = await readMemory(workSlug);
+async function loadContext(userId: string, workSlug: string, session: DesignSession, stageIndex: number) {
+  const memory = await readMemory(userId, workSlug);
   let chapter = null;
   let previousChapter = null;
   if (session.chapterSlug) {
     try {
-      chapter = await readChapter(workSlug, session.chapterSlug);
-      const adj = await getAdjacentChapters(workSlug, session.chapterSlug);
+      chapter = await readChapter(userId, workSlug, session.chapterSlug);
+      const adj = await getAdjacentChapters(userId, workSlug, session.chapterSlug);
       previousChapter = adj.previous;
     } catch {
       // ignore
     }
   } else if (stageIndex === 3) {
-    const chapters = await listChapters(workSlug);
+    const chapters = await listChapters(userId, workSlug);
     if (chapters.length > 0) {
       previousChapter = chapters[chapters.length - 1];
     }
   }
   let workTitle = workSlug;
   try {
-    workTitle = (await readWork(workSlug)).title;
+    workTitle = (await readWork(userId, workSlug)).title;
   } catch {
     // ignore
   }
@@ -62,8 +63,8 @@ export async function generateStage(
     autoAccept?: boolean;
   },
 ): Promise<{ output: string; ok: boolean; error?: string }> {
-  const { workSlug, sessionId, stageIndex } = ctx;
-  const session = await readSession(workSlug, sessionId);
+  const { userId, workSlug, sessionId, stageIndex } = ctx;
+  const session = await readSession(userId, workSlug, sessionId);
   const stageName = STAGE_INDEX_TO_NAME[stageIndex];
 
   // Mark generating.
@@ -74,10 +75,11 @@ export async function generateStage(
     acceptedOutput: undefined,
     userEditedOutput: undefined,
   };
-  await writeSession(session);
+  await writeSession(userId, session);
 
-  const { memory, chapter, previousChapter, workTitle } = await loadContext(workSlug, session, stageIndex);
+  const { memory, chapter, previousChapter, workTitle } = await loadContext(userId, workSlug, session, stageIndex);
   const { system, user } = await buildStagePrompt({
+    userId,
     workSlug,
     workTitle,
     memory,
@@ -88,7 +90,7 @@ export async function generateStage(
   });
 
   let output = "";
-  const provider = await getProvider();
+  const provider = await getProvider(userId);
   const temperature = stageName === "draft" ? 0.85 : 0.7;
   const disableThinking = disableThinkingForDesignStage(stageName);
   try {
@@ -116,7 +118,7 @@ export async function generateStage(
       }
     }
 
-    await updateStage(workSlug, sessionId, stageIndex, {
+    await updateStage(userId, workSlug, sessionId, stageIndex, {
       status: "done",
       output: storedOutput,
       ...(options?.autoAccept ? { acceptedOutput: storedOutput } : {}),
@@ -124,8 +126,7 @@ export async function generateStage(
     });
     return { output: storedOutput, ok: true };
   } catch (err) {
-    // Save whatever partial output we have and revert to pending.
-    await updateStage(workSlug, sessionId, stageIndex, {
+    await updateStage(userId, workSlug, sessionId, stageIndex, {
       status: "pending",
       output,
     });

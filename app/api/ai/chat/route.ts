@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { nanoid } from "nanoid";
 import type { ChatMessage, ConversationScope } from "@/lib/types";
@@ -14,7 +14,8 @@ import {
   writeConversation,
 } from "@/lib/memory/conversations";
 import { preparePrompt, buildProviderMessages } from "@/lib/ai/context";
-import { getProvider, isAIConfigured, getCurrentModel } from "@/lib/ai/provider";
+import { getProvider } from "@/lib/ai/provider";
+import { getCurrentUserId } from "@/lib/auth/session";
 import { CHAT_MODES } from "@/lib/ai/prompts";
 
 export const dynamic = "force-dynamic";
@@ -45,11 +46,12 @@ const Body = z.object({
 //   {"type":"done","messageId":"..."}
 //   {"type":"error","error":"..."}
 export async function POST(req: NextRequest) {
-  if (!isAIConfigured()) {
-    return new Response(
-      JSON.stringify({ error: "AI not configured. Set ZAI_API_KEY in .env" }),
-      { status: 503, headers: { "content-type": "application/json" } },
-    );
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return new Response(JSON.stringify({ error: "unauthorized" }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    });
   }
 
   const abort = new AbortController();
@@ -74,12 +76,12 @@ export async function POST(req: NextRequest) {
         // Load or create conversation. For non-general scopes, find existing
         // scoped conversation (one per memory item / chapter) or create new.
         let conversation = conversationId
-          ? await readConversation(workSlug, conversationId)
+          ? await readConversation(userId, workSlug, conversationId)
           : null;
 
         if (!conversation) {
           if (scope.kind !== "general") {
-            const existing = await listConversationsByScope(workSlug, scope);
+            const existing = await listConversationsByScope(userId, workSlug, scope);
             conversation = existing[0] ?? newConversation(workSlug, scope);
           } else {
             conversation = newConversation(workSlug, scope);
@@ -97,17 +99,17 @@ export async function POST(req: NextRequest) {
         conversation = appendMessage(conversation, userMsg);
 
         // Build context. Load whatever the scope needs.
-        const memory = await readMemory(workSlug);
+        const memory = await readMemory(userId, workSlug);
         let memoryItemJson: string | undefined;
         let chapter;
 
         if (scope.kind === "memory") {
           const list =
             scope.memoryKind === "characters"
-              ? await readCharacters(workSlug)
+              ? await readCharacters(userId, workSlug)
               : scope.memoryKind === "worldbuilding"
-                ? await readWorldbuilding(workSlug)
-                : await readPlot(workSlug);
+                ? await readWorldbuilding(userId, workSlug)
+                : await readPlot(userId, workSlug);
           const item = list.find((x) => x.id === scope.itemId);
           if (!item) {
             send({ type: "error", error: "memory item not found" });
@@ -117,7 +119,7 @@ export async function POST(req: NextRequest) {
           memoryItemJson = JSON.stringify(item, null, 2);
         } else if (scope.kind === "chapter") {
           try {
-            chapter = await readChapter(workSlug, scope.chapterSlug);
+            chapter = await readChapter(userId, workSlug, scope.chapterSlug);
           } catch {
             send({ type: "error", error: "chapter not found" });
             controller.close();
@@ -130,12 +132,13 @@ export async function POST(req: NextRequest) {
         let previousChapter = null;
         let nextChapter = null;
         if (scope.kind === "chapter") {
-          const adj = await getAdjacentChapters(workSlug, scope.chapterSlug);
+          const adj = await getAdjacentChapters(userId, workSlug, scope.chapterSlug);
           previousChapter = adj.previous;
           nextChapter = adj.next;
         }
 
         const prepared = await preparePrompt({
+          userId,
           workSlug,
           memory,
           history: conversation.messages,
@@ -153,12 +156,12 @@ export async function POST(req: NextRequest) {
           type: "meta",
           conversationId: conversation.id,
           mode,
-          model: getCurrentModel(),
+          model: "(gemini)",
         });
 
         // Stream tokens
         let assistantText = "";
-        const provider = await getProvider();
+        const provider = await getProvider(userId);
         const spec = CHAT_MODES[mode];
         // Per-call thinking policy:
         //   - chapter scope writes prose / proposals → keep reasoning on
@@ -195,7 +198,7 @@ export async function POST(req: NextRequest) {
           createdAt: new Date().toISOString(),
         };
         conversation = appendMessage(conversation, assistantMsg);
-        await writeConversation(conversation);
+        await writeConversation(userId, conversation);
         conversationId = conversation.id;
 
         send({ type: "done", messageId: assistantMsg.id, conversationId });

@@ -8,6 +8,7 @@ import { isPatchEmpty } from "@/lib/types";
 import type { Character, MemoryPatch, PlotStatus, PlotThread, WorldEntry } from "@/lib/types";
 import { newMemoryId } from "@/lib/memory/id";
 import { decodeParam } from "@/lib/utils/params";
+import { getCurrentUserId } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -122,8 +123,11 @@ function emptyWorkMemory() {
 // Commit the draft (stage 4) to the chapter, and — if a memory patch exists
 // and the caller didn't opt out — apply the patch in the same transaction.
 export async function POST(req: NextRequest, { params }: { params: { slug: string; sessionId: string } }) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const slug = decodeParam(params.slug);
-  const session = await readSession(slug, params.sessionId);
+  const session = await readSession(userId, slug, params.sessionId);
 
   const draftStage = session.stages[3];
   const draft = draftStage.acceptedOutput ?? draftStage.userEditedOutput ?? draftStage.output;
@@ -138,19 +142,19 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
   // 1) Commit chapter (with version snapshot for existing chapters).
   let chapter;
   if (session.chapterSlug) {
-    chapter = await applyChapterUpdate(slug, session.chapterSlug, { content: draft }, "design");
+    chapter = await applyChapterUpdate(userId, slug, session.chapterSlug, { content: draft }, "design");
   } else {
     const title = session.goal.slice(0, 30).replace(/\s+/g, " ").trim() || "新章節";
-    chapter = await createChapter(slug, { title, content: draft });
+    chapter = await createChapter(userId, slug, { title, content: draft });
   }
-  await syncWork(slug);
+  await syncWork(userId, slug);
 
   // 2) Apply memory patch if present and not opted out.
   const patch = draftStage.memoryPatch;
   const patchSummary = { applied: false, added: 0, updated: 0, removed: 0, styleAppend: false, skipped: false };
   if (patch && !isPatchEmpty(patch) && applyMemoryPatch) {
     try {
-      const current = await readMemory(slug);
+      const current = await readMemory(userId, slug);
       const before = {
         c: current.characters.length,
         w: current.worldbuilding.length,
@@ -162,7 +166,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
         w: next.worldbuilding.length,
         p: next.plot.length,
       };
-      await writeMemory(slug, next);
+      await writeMemory(userId, slug, next);
       patchSummary.applied = true;
       patchSummary.added =
         Math.max(0, after.c - before.c) + Math.max(0, after.w - before.w) + Math.max(0, after.p - before.p);
@@ -193,7 +197,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     chapterSlug: chapter.slug,
     committed: true,
   };
-  await writeSession(committed);
+  await writeSession(userId, committed);
 
   return NextResponse.json({ chapter, sessionId: session.id, patch: patchSummary });
 }

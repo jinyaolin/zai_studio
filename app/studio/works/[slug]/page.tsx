@@ -1,9 +1,11 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { listChapters } from "@/lib/content/chapters";
 import { readWork } from "@/lib/content/works";
 import { formatDate, formatWordCount } from "@/lib/utils";
 import { decodeParam } from "@/lib/utils/params";
+import { getCurrentUserId } from "@/lib/auth/session";
+import { queryUserById } from "@/lib/content/db";
 import ChapterListClient from "./ChapterListClient";
 import NarrationSettings from "./NarrationSettings";
 import StatusToggle from "./StatusToggle";
@@ -18,15 +20,20 @@ export default async function WorkOverviewPage({
 }: {
   params: { slug: string };
 }) {
+  const userId = await getCurrentUserId();
+  if (!userId) redirect("/studio/login");
+
   const slug = decodeParam(params.slug);
   let work;
   try {
-    work = await readWork(slug);
+    work = await readWork(userId, slug);
   } catch {
     notFound();
   }
-  const chapters = await listChapters(slug);
+  const chapters = await listChapters(userId, slug);
   const totalWords = chapters.reduce((sum, c) => sum + c.wordCount, 0);
+  const author = queryUserById(userId);
+  const authorHandle = author?.handle ?? "";
 
   return (
     <div className="max-w-4xl mx-auto px-8 py-10">
@@ -90,7 +97,7 @@ export default async function WorkOverviewPage({
           <div className="text-xs text-stone-500 mt-0.5">Design Thinking 寫新章</div>
         </Link>
         <Link
-          href={`/works/${encodeURIComponent(work.slug)}`}
+          href={`/works/${authorHandle ? encodeURIComponent(authorHandle) : ""}/${encodeURIComponent(work.slug)}`}
           className="px-4 py-3 border border-stone-300 rounded-md hover:border-stone-500 hover:bg-stone-100"
         >
           <div className="font-serif text-lg">預覽 ↗</div>

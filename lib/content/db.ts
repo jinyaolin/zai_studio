@@ -6,9 +6,23 @@ import { DB_PATH, DATA_DIR } from "./paths";
 // Single shared connection. better-sqlite3 is synchronous; safe to reuse.
 let _db: Database.Database | null = null;
 
+// Per-user schema. Every content row is scoped by user_id; queries filter
+// accordingly. Composite PKs (user_id, slug) so two users can have the same
+// work slug without colliding.
 const SCHEMA = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  sub TEXT NOT NULL UNIQUE,
+  handle TEXT UNIQUE,
+  display_name TEXT,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS works (
-  slug TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  slug TEXT NOT NULL,
   title TEXT NOT NULL,
   type TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -18,12 +32,15 @@ CREATE TABLE IF NOT EXISTS works (
   word_count INTEGER DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  published_at TEXT
+  published_at TEXT,
+  PRIMARY KEY (user_id, slug),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS chapters (
-  slug TEXT NOT NULL,
+  user_id TEXT NOT NULL,
   work_slug TEXT NOT NULL,
+  slug TEXT NOT NULL,
   chapter_order INTEGER NOT NULL,
   title TEXT NOT NULL,
   word_count INTEGER DEFAULT 0,
@@ -31,32 +48,47 @@ CREATE TABLE IF NOT EXISTS chapters (
   audio_status TEXT DEFAULT 'none',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  PRIMARY KEY (work_slug, slug),
-  FOREIGN KEY (work_slug) REFERENCES works(slug) ON DELETE CASCADE
+  PRIMARY KEY (user_id, work_slug, slug),
+  FOREIGN KEY (user_id, work_slug) REFERENCES works(user_id, slug) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
   work_slug TEXT NOT NULL,
   title TEXT,
   message_count INTEGER DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  FOREIGN KEY (work_slug) REFERENCES works(slug) ON DELETE CASCADE
+  FOREIGN KEY (user_id, work_slug) REFERENCES works(user_id, slug) ON DELETE CASCADE
 );
 
-CREATE VIRTUAL TABLE IF NOT EXISTS chapters_fts USING fts5(
-  work_slug UNINDEXED,
-  chapter_slug UNINDEXED,
-  title,
-  content,
-  tokenize = 'unicode61'
-);
-
-CREATE INDEX IF NOT EXISTS idx_chapters_work_order ON chapters(work_slug, chapter_order);
+CREATE INDEX IF NOT EXISTS idx_chapters_work_order ON chapters(user_id, work_slug, chapter_order);
+CREATE INDEX IF NOT EXISTS idx_works_user_status ON works(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_works_status ON works(status);
-CREATE INDEX IF NOT EXISTS idx_conversations_work ON conversations(work_slug);
+CREATE INDEX IF NOT EXISTS idx_conversations_work ON conversations(user_id, work_slug);
+CREATE INDEX IF NOT EXISTS idx_users_handle ON users(handle);
 `;
+
+// Migrate from pre-multi-user schema (single-author: PK was slug only, no
+// user_id column). Drop & recreate — the data is wiped in P6 anyway, and
+// existing rows would have NULL user_id which violates NOT NULL.
+function migrateFromLegacySchema(db: Database.Database) {
+  const needsMigration = (() => {
+    try {
+      const cols = db.pragma(`table_info(works)`) as Array<{ name: string }>;
+      return cols.length > 0 && !cols.some((c) => c.name === "user_id");
+    } catch {
+      return false;
+    }
+  })();
+  if (!needsMigration) return;
+  console.warn("[db] legacy schema detected — dropping pre-multi-user tables for migration");
+  db.exec(`DROP TABLE IF EXISTS chapters`);
+  db.exec(`DROP TABLE IF EXISTS conversations`);
+  db.exec(`DROP TABLE IF EXISTS works`);
+  // users table is new in this schema; safe to leave alone or recreate.
+}
 
 export function getDb(): Database.Database {
   if (_db) return _db;
@@ -65,11 +97,13 @@ export function getDb(): Database.Database {
   _db = new Database(DB_PATH);
   _db.pragma("journal_mode = WAL");
   _db.pragma("foreign_keys = ON");
+  migrateFromLegacySchema(_db);
   _db.exec(SCHEMA);
   return _db;
 }
 
 export interface WorkRow {
+  user_id: string;
   slug: string;
   title: string;
   type: string;
@@ -84,8 +118,9 @@ export interface WorkRow {
 }
 
 export interface ChapterRow {
-  slug: string;
+  user_id: string;
   work_slug: string;
+  slug: string;
   chapter_order: number;
   title: string;
   word_count: number;
@@ -97,6 +132,7 @@ export interface ChapterRow {
 
 export interface ConversationRow {
   id: string;
+  user_id: string;
   work_slug: string;
   title: string | null;
   message_count: number;
@@ -107,18 +143,18 @@ export interface ConversationRow {
 // ─── Work queries ─────────────────────────────────────────────────
 const stmtUpsertWork = () =>
   getDb().prepare<
-    [string, string, string, string, string, string | null, string, number, string, string, string | null]
+    [string, string, string, string, string, string, string | null, string, number, string, string, string | null]
   >(
-    `INSERT INTO works (slug, title, type, status, synopsis, genre, tags, word_count, created_at, updated_at, published_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(slug) DO UPDATE SET
+    `INSERT INTO works (user_id, slug, title, type, status, synopsis, genre, tags, word_count, created_at, updated_at, published_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, slug) DO UPDATE SET
        title=excluded.title, type=excluded.type, status=excluded.status,
        synopsis=excluded.synopsis, genre=excluded.genre, tags=excluded.tags,
        word_count=excluded.word_count, updated_at=excluded.updated_at,
        published_at=excluded.published_at`,
   );
 
-export function upsertWorkRow(w: {
+export function upsertWorkRow(userId: string, w: {
   slug: string;
   title: string;
   type: string;
@@ -132,6 +168,7 @@ export function upsertWorkRow(w: {
   publishedAt: string | null;
 }) {
   stmtUpsertWork().run(
+    userId,
     w.slug,
     w.title,
     w.type,
@@ -146,30 +183,29 @@ export function upsertWorkRow(w: {
   );
 }
 
-export function deleteWorkRow(slug: string) {
-  getDb().prepare(`DELETE FROM works WHERE slug = ?`).run(slug);
+export function deleteWorkRow(userId: string, slug: string) {
+  getDb().prepare(`DELETE FROM works WHERE user_id = ? AND slug = ?`).run(userId, slug);
 }
 
 // Cascade rename of a work's slug across every table that references it.
 // Wrapped in a transaction so we never end up with rows pointing at a
-// directory that no longer exists. Files inside content/works/<slug>/ are
-// renamed by lib/content/works.ts before this is called.
-export function renameWorkRow(oldSlug: string, newSlug: string): void {
+// directory that no longer exists.
+export function renameWorkRow(userId: string, oldSlug: string, newSlug: string): void {
   if (oldSlug === newSlug) return;
   const db = getDb();
   const tx = db.transaction(() => {
-    // 1) works PK
     const w = db
-      .prepare<unknown[], WorkRow>(`SELECT * FROM works WHERE slug = ?`)
-      .get(oldSlug);
-    if (!w) return; // nothing to rename
-    db.prepare(`DELETE FROM works WHERE slug = ?`).run(oldSlug);
+      .prepare<unknown[], WorkRow>(`SELECT * FROM works WHERE user_id = ? AND slug = ?`)
+      .get(userId, oldSlug);
+    if (!w) return;
+    db.prepare(`DELETE FROM works WHERE user_id = ? AND slug = ?`).run(userId, oldSlug);
     db.prepare<
-      [string, string, string, string, string, string | null, string, number, string, string, string | null]
+      [string, string, string, string, string, string, string | null, string, number, string, string, string | null]
     >(
-      `INSERT INTO works (slug, title, type, status, synopsis, genre, tags, word_count, created_at, updated_at, published_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO works (user_id, slug, title, type, status, synopsis, genre, tags, word_count, created_at, updated_at, published_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
+      userId,
       newSlug,
       w.title,
       w.type,
@@ -183,57 +219,80 @@ export function renameWorkRow(oldSlug: string, newSlug: string): void {
       w.published_at,
     );
 
-    // 2) chapters.work_slug (FK with ON DELETE CASCADE, but UPDATE works too)
-    db.prepare(`UPDATE chapters SET work_slug = ? WHERE work_slug = ?`).run(newSlug, oldSlug);
-
-    // 3) conversations.work_slug
-    db.prepare(`UPDATE conversations SET work_slug = ? WHERE work_slug = ?`).run(newSlug, oldSlug);
-
-    // 4) chapters_fts.work_slug — FTS5 virtual tables can't UPDATE; copy + delete.
-    const ftsRows = db
-      .prepare<[string], { chapter_slug: string; title: string; content: string }>(
-        `SELECT chapter_slug, title, content FROM chapters_fts WHERE work_slug = ?`,
-      )
-      .all(oldSlug);
-    if (ftsRows.length > 0) {
-      const insertFts = db.prepare<[string, string, string, string]>(
-        `INSERT INTO chapters_fts (work_slug, chapter_slug, title, content) VALUES (?, ?, ?, ?)`,
-      );
-      for (const r of ftsRows) insertFts.run(newSlug, r.chapter_slug, r.title, r.content);
-      db.prepare(`DELETE FROM chapters_fts WHERE work_slug = ?`).run(oldSlug);
-    }
+    db.prepare(`UPDATE chapters SET work_slug = ? WHERE user_id = ? AND work_slug = ?`)
+      .run(newSlug, userId, oldSlug);
+    db.prepare(`UPDATE conversations SET work_slug = ? WHERE user_id = ? AND work_slug = ?`)
+      .run(newSlug, userId, oldSlug);
   });
   tx();
 }
 
-export function queryWorksByStatus(status: string): WorkRow[] {
-  return getDb().prepare(`SELECT * FROM works WHERE status = ? ORDER BY updated_at DESC`).all(status) as WorkRow[];
+export function queryWorksByStatus(userId: string, status: string): WorkRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM works WHERE user_id = ? AND status = ? ORDER BY updated_at DESC`)
+    .all(userId, status) as WorkRow[];
 }
 
-export function queryAllWorks(): WorkRow[] {
-  return getDb().prepare(`SELECT * FROM works ORDER BY updated_at DESC`).all() as WorkRow[];
+/** Cross-user: list all published works (for public reader side). */
+export function queryAllPublishedWorks(): Array<WorkRow & { handle: string | null }> {
+  return getDb()
+    .prepare<
+      unknown[],
+      WorkRow & { handle: string | null }
+    >(
+      `SELECT w.*, u.handle FROM works w
+       LEFT JOIN users u ON u.id = w.user_id
+       WHERE w.status = 'published'
+       ORDER BY w.updated_at DESC`,
+    )
+    .all();
 }
 
-export function queryWork(slug: string): WorkRow | undefined {
-  return getDb().prepare(`SELECT * FROM works WHERE slug = ?`).get(slug) as WorkRow | undefined;
+export function queryAllWorks(userId: string): WorkRow[] {
+  return getDb()
+    .prepare(`SELECT * FROM works WHERE user_id = ? ORDER BY updated_at DESC`)
+    .all(userId) as WorkRow[];
+}
+
+export function queryWork(userId: string, slug: string): WorkRow | undefined {
+  return getDb()
+    .prepare(`SELECT * FROM works WHERE user_id = ? AND slug = ?`)
+    .get(userId, slug) as WorkRow | undefined;
+}
+
+/** Look up a work by author handle + slug (public reader side). */
+export function queryPublishedWorkByHandle(
+  handle: string,
+  slug: string,
+): (WorkRow & { handle: string | null }) | undefined {
+  return getDb()
+    .prepare<
+      unknown[],
+      WorkRow & { handle: string | null }
+    >(
+      `SELECT w.*, u.handle FROM works w
+       INNER JOIN users u ON u.id = w.user_id
+       WHERE u.handle = ? AND w.slug = ? AND w.status = 'published'`,
+    )
+    .get(handle, slug) as (WorkRow & { handle: string | null }) | undefined;
 }
 
 // ─── Chapter queries ──────────────────────────────────────────────
 const stmtUpsertChapter = () =>
   getDb().prepare<
-    [string, string, number, string, number, string, string, string, string]
+    [string, string, string, number, string, number, string, string, string, string]
   >(
-    `INSERT INTO chapters (slug, work_slug, chapter_order, title, word_count, status, audio_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(work_slug, slug) DO UPDATE SET
+    `INSERT INTO chapters (user_id, work_slug, slug, chapter_order, title, word_count, status, audio_status, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, work_slug, slug) DO UPDATE SET
        chapter_order=excluded.chapter_order, title=excluded.title,
        word_count=excluded.word_count, status=excluded.status,
        audio_status=excluded.audio_status, updated_at=excluded.updated_at`,
   );
 
-export function upsertChapterRow(c: {
-  slug: string;
+export function upsertChapterRow(userId: string, c: {
   workSlug: string;
+  slug: string;
   order: number;
   title: string;
   wordCount: number;
@@ -243,8 +302,9 @@ export function upsertChapterRow(c: {
   updatedAt: string;
 }) {
   stmtUpsertChapter().run(
-    c.slug,
+    userId,
     c.workSlug,
+    c.slug,
     c.order,
     c.title,
     c.wordCount,
@@ -255,97 +315,72 @@ export function upsertChapterRow(c: {
   );
 }
 
-export function deleteChapterRow(workSlug: string, slug: string) {
-  getDb().prepare(`DELETE FROM chapters WHERE work_slug = ? AND slug = ?`).run(workSlug, slug);
+export function deleteChapterRow(userId: string, workSlug: string, slug: string) {
+  getDb()
+    .prepare(`DELETE FROM chapters WHERE user_id = ? AND work_slug = ? AND slug = ?`)
+    .run(userId, workSlug, slug);
 }
 
-// Move a chapter row from old slug to new slug + re-key its FTS entries.
-// Used when a draft chapter is renamed to keep its URL in sync with its title.
-export function renameChapterRow(workSlug: string, oldSlug: string, newSlug: string): void {
+export function renameChapterRow(
+  userId: string,
+  workSlug: string,
+  oldSlug: string,
+  newSlug: string,
+): void {
   if (oldSlug === newSlug) return;
   const db = getDb();
-  // Read existing row, then delete + insert under new key (PK is composite).
-  const row = db
-    .prepare<unknown[], ChapterRow>(`SELECT * FROM chapters WHERE work_slug = ? AND slug = ?`)
-    .get(workSlug, oldSlug);
-  if (!row) return;
-  db.prepare(`DELETE FROM chapters WHERE work_slug = ? AND slug = ?`).run(workSlug, oldSlug);
-  db.prepare<
-    [string, string, number, string, number, string, string, string, string]
-  >(
-    `INSERT INTO chapters (slug, work_slug, chapter_order, title, word_count, status, audio_status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(
-    newSlug,
-    row.work_slug,
-    row.chapter_order,
-    row.title,
-    row.word_count,
-    row.status,
-    row.audio_status,
-    row.created_at,
-    row.updated_at,
-  );
-  // Re-key FTS rows.
-  const ftsRows = db
-    .prepare<[string, string], { title: string; content: string }>(
-      `SELECT title, content FROM chapters_fts WHERE work_slug = ? AND chapter_slug = ?`,
-    )
-    .all(workSlug, oldSlug);
-  if (ftsRows.length > 0) {
-    db.prepare(`DELETE FROM chapters_fts WHERE work_slug = ? AND chapter_slug = ?`).run(workSlug, oldSlug);
-    const insertFts = db.prepare<[string, string, string, string]>(
-      `INSERT INTO chapters_fts (work_slug, chapter_slug, title, content) VALUES (?, ?, ?, ?)`,
+  const tx = db.transaction(() => {
+    const row = db
+      .prepare<unknown[], ChapterRow>(
+        `SELECT * FROM chapters WHERE user_id = ? AND work_slug = ? AND slug = ?`,
+      )
+      .get(userId, workSlug, oldSlug);
+    if (!row) return;
+    db.prepare(
+      `DELETE FROM chapters WHERE user_id = ? AND work_slug = ? AND slug = ?`,
+    ).run(userId, workSlug, oldSlug);
+    stmtUpsertChapter().run(
+      userId,
+      workSlug,
+      newSlug,
+      row.chapter_order,
+      row.title,
+      row.word_count,
+      row.status,
+      row.audio_status,
+      row.created_at,
+      row.updated_at,
     );
-    for (const r of ftsRows) insertFts.run(workSlug, newSlug, r.title, r.content);
-  }
+  });
+  tx();
 }
 
-export function queryChaptersByWork(workSlug: string): ChapterRow[] {
+export function queryChaptersByWork(userId: string, workSlug: string): ChapterRow[] {
   return getDb()
-    .prepare(`SELECT * FROM chapters WHERE work_slug = ? ORDER BY chapter_order ASC`)
-    .all(workSlug) as ChapterRow[];
+    .prepare(`SELECT * FROM chapters WHERE user_id = ? AND work_slug = ? ORDER BY chapter_order ASC`)
+    .all(userId, workSlug) as ChapterRow[];
 }
 
-// ─── FTS ──────────────────────────────────────────────────────────
-// FTS5 virtual tables don't support UPSERT / ON CONFLICT.
-// Callers must delete-then-insert.
-const stmtInsertFts = () =>
-  getDb().prepare<[string, string, string, string]>(
-    `INSERT INTO chapters_fts (work_slug, chapter_slug, title, content)
-     VALUES (?, ?, ?, ?)`,
-  );
-
-export function upsertChapterFts(workSlug: string, chapterSlug: string, title: string, content: string) {
-  const db = getDb();
-  db.prepare(`DELETE FROM chapters_fts WHERE work_slug = ? AND chapter_slug = ?`).run(workSlug, chapterSlug);
-  stmtInsertFts().run(workSlug, chapterSlug, title, content);
-}
-
-export function deleteChapterFts(workSlug: string, chapterSlug: string) {
-  getDb()
-    .prepare(`DELETE FROM chapters_fts WHERE work_slug = ? AND chapter_slug = ?`)
-    .run(workSlug, chapterSlug);
-}
-
-export function searchChapters(query: string, limit = 20) {
-  const escaped = query.replace(/["']/g, " ");
-  const db = getDb();
-  return db
-    .prepare(
-      `SELECT work_slug AS workSlug, chapter_slug AS chapterSlug, title,
-              snippet(chapters_fts, 3, '⟦', '⟧', '…', 20) AS snippet,
-              rank
-       FROM chapters_fts
-       WHERE chapters_fts MATCH ?
-       ORDER BY rank
-       LIMIT ?`,
+/** Public reader: chapters by author handle + work slug. */
+export function queryChaptersByPublishedWork(
+  handle: string,
+  workSlug: string,
+): ChapterRow[] {
+  return getDb()
+    .prepare<
+      unknown[],
+      ChapterRow
+    >(
+      `SELECT c.* FROM chapters c
+       INNER JOIN users u ON u.id = c.user_id
+       WHERE u.handle = ? AND c.work_slug = ?
+       ORDER BY c.chapter_order ASC`,
     )
-    .all(escaped, limit);
+    .all(handle, workSlug) as ChapterRow[];
 }
 
 // ─── Conversation queries ─────────────────────────────────────────
-export function upsertConversationRow(c: {
+export function upsertConversationRow(userId: string, c: {
   id: string;
   workSlug: string;
   title: string | null;
@@ -355,22 +390,91 @@ export function upsertConversationRow(c: {
 }) {
   getDb()
     .prepare<
-      [string, string, string | null, number, string, string]
+      [string, string, string, string | null, number, string, string]
     >(
-      `INSERT INTO conversations (id, work_slug, title, message_count, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
+      `INSERT INTO conversations (id, user_id, work_slug, title, message_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
+         user_id=excluded.user_id,
          title=excluded.title, message_count=excluded.message_count, updated_at=excluded.updated_at`,
     )
-    .run(c.id, c.workSlug, c.title, c.messageCount, c.createdAt, c.updatedAt);
+    .run(c.id, userId, c.workSlug, c.title, c.messageCount, c.createdAt, c.updatedAt);
 }
 
-export function deleteConversationRow(id: string) {
-  getDb().prepare(`DELETE FROM conversations WHERE id = ?`).run(id);
+export function deleteConversationRow(userId: string, id: string) {
+  getDb()
+    .prepare(`DELETE FROM conversations WHERE user_id = ? AND id = ?`)
+    .run(userId, id);
 }
 
-export function queryConversationsByWork(workSlug: string): ConversationRow[] {
+export function queryConversationsByWork(userId: string, workSlug: string): ConversationRow[] {
   return getDb()
-    .prepare(`SELECT * FROM conversations WHERE work_slug = ? ORDER BY updated_at DESC`)
-    .all(workSlug) as ConversationRow[];
+    .prepare(`SELECT * FROM conversations WHERE user_id = ? AND work_slug = ? ORDER BY updated_at DESC`)
+    .all(userId, workSlug) as ConversationRow[];
+}
+
+// ─── User queries ─────────────────────────────────────────────────
+export interface UserRow {
+  id: string;
+  email: string;
+  sub: string;
+  handle: string | null;
+  display_name: string | null;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export function queryUserBySub(sub: string): UserRow | undefined {
+  return getDb()
+    .prepare(`SELECT * FROM users WHERE sub = ?`)
+    .get(sub) as UserRow | undefined;
+}
+
+export function queryUserById(id: string): UserRow | undefined {
+  return getDb()
+    .prepare(`SELECT * FROM users WHERE id = ?`)
+    .get(id) as UserRow | undefined;
+}
+
+export function queryUserByHandle(handle: string): UserRow | undefined {
+  return getDb()
+    .prepare(`SELECT * FROM users WHERE handle = ?`)
+    .get(handle) as UserRow | undefined;
+}
+
+export function isHandleTaken(handle: string, excludeUserId?: string): boolean {
+  const row = getDb()
+    .prepare(`SELECT 1 FROM users WHERE lower(handle) = lower(?) AND (? IS NULL OR id != ?) LIMIT 1`)
+    .get(handle.toLowerCase(), excludeUserId ?? null, excludeUserId ?? "") as
+    | { 1: number }
+    | undefined;
+  return row !== undefined;
+}
+
+export function insertUser(input: {
+  id: string;
+  email: string;
+  sub: string;
+  createdAt: string;
+}): UserRow {
+  getDb()
+    .prepare(
+      `INSERT INTO users (id, email, sub, created_at, last_login_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    )
+    .run(input.id, input.email, input.sub, input.createdAt, input.createdAt);
+  return queryUserById(input.id)!;
+}
+
+export function touchUserLogin(id: string, lastLoginAt: string): void {
+  getDb()
+    .prepare(`UPDATE users SET last_login_at = ? WHERE id = ?`)
+    .run(lastLoginAt, id);
+}
+
+export function setUserHandle(userId: string, handle: string): UserRow {
+  getDb()
+    .prepare(`UPDATE users SET handle = ? WHERE id = ? AND handle IS NULL`)
+    .run(handle, userId);
+  return queryUserById(userId)!;
 }

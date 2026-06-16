@@ -1,8 +1,9 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { readMemory } from "@/lib/memory/store";
 import { getAdjacentChapters, readChapter } from "@/lib/content/chapters";
 import { readWork } from "@/lib/content/works";
-import { getProvider, isAIConfigured } from "@/lib/ai/provider";
+import { getProvider } from "@/lib/ai/provider";
+import { getCurrentUserId } from "@/lib/auth/session";
 import { buildMemoryExtractionPrompt } from "@/lib/ai/memory-extract";
 import { DISABLE_THINKING_FOR_EXTRACTION } from "@/lib/ai/thinking-policy";
 import { decodeParam } from "@/lib/utils/params";
@@ -15,19 +16,16 @@ export const maxDuration = 120;
 // The accumulated text contains a <PROPOSAL>{json}</PROPOSAL> with the proposed
 // full memory update. The client parses it.
 export async function POST(_req: NextRequest, { params }: { params: { slug: string; chapter: string } }) {
-  if (!isAIConfigured()) {
-    return new Response(
-      JSON.stringify({ error: "AI not configured. Set ZAI_API_KEY in .env" }),
-      { status: 503, headers: { "content-type": "application/json" } },
-    );
-  }
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const workSlug = decodeParam(params.slug);
   const chapterSlug = decodeParam(params.chapter);
 
   let work, chapter;
   try {
-    work = await readWork(workSlug);
-    chapter = await readChapter(workSlug, chapterSlug);
+    work = await readWork(userId, workSlug);
+    chapter = await readChapter(userId, workSlug, chapterSlug);
   } catch {
     return new Response(JSON.stringify({ error: "not found" }), {
       status: 404,
@@ -35,8 +33,8 @@ export async function POST(_req: NextRequest, { params }: { params: { slug: stri
     });
   }
 
-  const memory = await readMemory(workSlug);
-  const adj = await getAdjacentChapters(workSlug, chapterSlug);
+  const memory = await readMemory(userId, workSlug);
+  const adj = await getAdjacentChapters(userId, workSlug, chapterSlug);
 
   const { system, user } = buildMemoryExtractionPrompt({
     work,
@@ -54,7 +52,7 @@ export async function POST(_req: NextRequest, { params }: { params: { slug: stri
       send({ type: "meta" });
 
       let output = "";
-      const provider = await getProvider();
+      const provider = await getProvider(userId);
       try {
         for await (const delta of provider.stream(
           [

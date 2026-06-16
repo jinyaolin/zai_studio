@@ -2,12 +2,18 @@ import { createWork } from "@/lib/content/works";
 import { createChapter } from "@/lib/content/chapters";
 import { writeMemory } from "@/lib/memory/store";
 import type { WorkMemory } from "@/lib/types";
-import { newMemoryId } from "@/lib/memory/store";
+import { newMemoryId } from "@/lib/memory/id";
 
 async function main() {
-  console.log("Seeding demo work: 雨夜來客 (short) ...");
+  const userId = process.argv[2];
+  if (!userId) {
+    console.error("Usage: npm run seed <userId>");
+    process.exit(1);
+  }
 
-  const work = await createWork({
+  console.log(`Seeding demo work for user ${userId}: 雨夜來客 (short) ...`);
+
+  const work = await createWork(userId, {
     title: "雨夜來客",
     type: "short",
     synopsis: "梅雨季某個深夜，獨居老作家迎來一位不速之客，對話揭開一段被遺忘的往事。",
@@ -60,9 +66,9 @@ async function main() {
     style:
       "# 風格指南\n\n- 視角：第三人稱有限，貼近沈墨\n- 語氣：節制、留白、潮濕\n- 用字：偏文言與書面語，避免口語\n- motif：雨、傘、鋼琴、舊信\n- 禁忌：不直接點破超自然元素\n",
   };
-  await writeMemory(work.slug, memory);
+  await writeMemory(userId, work.slug, memory);
 
-  await createChapter(work.slug, {
+  await createChapter(userId, work.slug, {
     title: "雨夜來客",
     content:
       "那年梅雨季的某個深夜，雨下得像有人在天上傾倒一整缸的舊事。\n\n" +
@@ -75,7 +81,7 @@ async function main() {
     status: "draft",
   });
 
-  console.log(`✓ Seeded "${work.title}" at content/works/${work.slug}/`);
+  console.log(`✓ Seeded "${work.title}" for user ${userId} at content/users/${userId}/works/${work.slug}/`);
 }
 
 main().catch((err) => {

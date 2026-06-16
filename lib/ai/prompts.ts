@@ -65,6 +65,7 @@ export function buildMemoryItemSystemPrompt(args: {
 
 // ─── Chapter scope ─────────────────────────────────────────────────
 export async function buildChapterSystemPrompt(args: {
+  userId: string;
   workSlug: string;
   workTitle: string;
   chapter: Chapter;
@@ -75,7 +76,7 @@ export async function buildChapterSystemPrompt(args: {
   /** Optional query to drive chunk retrieval from earlier chapters. */
   retrievalQuery?: string;
 }): Promise<string> {
-  const { workSlug, workTitle, chapter, memory, mode, previousChapter, nextChapter, retrievalQuery } = args;
+  const { userId, workSlug, workTitle, chapter, memory, mode, previousChapter, nextChapter, retrievalQuery } = args;
   const spec = CHAT_MODES[mode];
   const parts: string[] = [
     `你是《${workTitle}》第 ${chapter.order} 章「${chapter.title}」的專屬編輯。`,
@@ -111,7 +112,7 @@ export async function buildChapterSystemPrompt(args: {
   // the discussion touches something established many chapters back.
   if (retrievalQuery) {
     try {
-      const chunks = await retrieveChapterChunks(workSlug, retrievalQuery, {
+      const chunks = await retrieveChapterChunks(userId, workSlug, retrievalQuery, {
         excludeChapter: chapter.slug,
         topK: 4,
       });

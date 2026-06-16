@@ -5,6 +5,7 @@ import { emptyMemory } from "@/lib/types";
 import type { PlotStatus, WorkMemory } from "@/lib/types";
 import { decodeParam } from "@/lib/utils/params";
 import { newMemoryId } from "@/lib/memory/id";
+import { getCurrentUserId } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -108,9 +109,12 @@ function normalize(parsed: z.infer<typeof MemorySchema>): WorkMemory {
 }
 
 export async function GET(_req: NextRequest, { params }: { params: { slug: string } }) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const slug = decodeParam(params.slug);
   try {
-    const memory = await readMemory(slug);
+    const memory = await readMemory(userId, slug);
     return NextResponse.json({ memory });
   } catch {
     return NextResponse.json({ memory: emptyMemory() });
@@ -118,6 +122,9 @@ export async function GET(_req: NextRequest, { params }: { params: { slug: strin
 }
 
 export async function PUT(req: NextRequest, { params }: { params: { slug: string } }) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const slug = decodeParam(params.slug);
   const body = await req.json().catch(() => null);
   const parsed = MemorySchema.safeParse(body);
@@ -125,6 +132,6 @@ export async function PUT(req: NextRequest, { params }: { params: { slug: string
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
   const memory = normalize(parsed.data);
-  await writeMemory(slug, memory);
+  await writeMemory(userId, slug, memory);
   return NextResponse.json({ memory });
 }

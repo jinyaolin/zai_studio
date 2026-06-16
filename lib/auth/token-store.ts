@@ -1,12 +1,9 @@
-// Encrypted storage for Google OAuth tokens + active AI provider selection.
+// Encrypted storage for Google OAuth tokens, scoped per user.
 //
-// Both live under data/ (gitignored). Single-user author model — no per-user
-// namespacing needed; the file is the source of truth for the one author
-// running this instance.
-//
-// Encryption: AES-256-GCM with a key derived (SHA-256) from AUTH_SECRET.
+// Path: data/users/<userId>/google-tokens.json
+// Encryption: AES-256-GCM with key derived (SHA-256) from AUTH_SECRET.
 // access_token is short-lived (~1h) but refresh_token is long-lived and
-// equivalent to a credential, so we encrypt at rest.
+// equivalent to a credential — encrypt at rest.
 
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { promises as fs } from "node:fs";
@@ -14,33 +11,6 @@ import path from "node:path";
 import { DATA_DIR } from "@/lib/content/paths";
 import type { GoogleTokens, GoogleUserInfo } from "./google-oauth";
 import { getTokenEncryptionKey } from "./google-oauth";
-
-const TOKENS_PATH = path.join(DATA_DIR, "google-tokens.json");
-const SETTINGS_PATH = path.join(DATA_DIR, "ai-settings.json");
-
-export type AIProviderName = "zai" | "gemini-oauth";
-
-export interface AISettings {
-  /** Which provider getProvider() should return. */
-  activeProvider: AIProviderName;
-  /** Gemini model override; falls back to GEMINI_MODEL env then default. */
-  geminiModel?: string;
-  /** When the user last connected / disconnected. */
-  connectedAt?: string;
-}
-
-interface StoredTokens {
-  /** Encrypted blob (base64). */
-  ciphertext: string;
-  /** AES-GCM IV (base64). */
-  iv: string;
-  /** AES-GCM auth tag (base64). */
-  tag: string;
-  /** Connected user info — not secret, but stored alongside for convenience. */
-  userInfo: GoogleUserInfo;
-  /** Stored at ISO-8601. */
-  storedAt: string;
-}
 
 // ─── Encryption helpers ───────────────────────────────────────────
 
@@ -72,73 +42,95 @@ function decrypt(blob: { ciphertext: string; iv: string; tag: string }): string 
   return dec.toString("utf8");
 }
 
+// ─── Per-user path ────────────────────────────────────────────────
+
+function userDir(userId: string): string {
+  return path.join(DATA_DIR, "users", userId);
+}
+
+function tokensPath(userId: string): string {
+  return path.join(userDir(userId), "google-tokens.json");
+}
+
+interface StoredTokens {
+  ciphertext: string;
+  iv: string;
+  tag: string;
+  userInfo: GoogleUserInfo;
+  storedAt: string;
+}
+
 // ─── Token store ──────────────────────────────────────────────────
 
-export async function saveGoogleTokens(tokens: GoogleTokens, userInfo: GoogleUserInfo): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
+export async function saveGoogleTokens(
+  tokens: GoogleTokens,
+  userInfo: GoogleUserInfo,
+  userId: string,
+): Promise<void> {
+  await fs.mkdir(userDir(userId), { recursive: true });
   const encrypted = encrypt(JSON.stringify(tokens));
   const stored: StoredTokens = {
     ...encrypted,
     userInfo,
     storedAt: new Date().toISOString(),
   };
-  await fs.writeFile(TOKENS_PATH, JSON.stringify(stored, null, 2) + "\n", "utf8");
+  await fs.writeFile(tokensPath(userId), JSON.stringify(stored, null, 2) + "\n", "utf8");
 }
 
-export async function loadGoogleTokens(): Promise<{ tokens: GoogleTokens; userInfo: GoogleUserInfo } | null> {
+export async function loadGoogleTokens(
+  userId: string,
+): Promise<{ tokens: GoogleTokens; userInfo: GoogleUserInfo } | null> {
   try {
-    const raw = await fs.readFile(TOKENS_PATH, "utf8");
+    const raw = await fs.readFile(tokensPath(userId), "utf8");
     const stored = JSON.parse(raw) as StoredTokens;
     const tokens = JSON.parse(decrypt(stored)) as GoogleTokens;
     return { tokens, userInfo: stored.userInfo };
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
-    console.warn("[token-store] failed to load google tokens:", (err as Error).message);
+    console.warn(`[token-store] failed to load tokens for ${userId}:`, (err as Error).message);
     return null;
   }
 }
 
-export async function clearGoogleTokens(): Promise<void> {
+export async function clearGoogleTokens(userId: string): Promise<void> {
   try {
-    await fs.rm(TOKENS_PATH);
+    await fs.rm(tokensPath(userId));
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
 }
 
-// ─── AI settings ──────────────────────────────────────────────────
+// ─── Per-user AI settings ─────────────────────────────────────────
+// Currently just `geminiModel` per user (no provider switching — Gemini
+// only). Lives next to the user's encrypted tokens.
 
-const DEFAULT_SETTINGS: AISettings = {
-  activeProvider: "zai",
-};
+export interface UserAISettings {
+  geminiModel?: string;
+}
 
-export async function loadAISettings(): Promise<AISettings> {
+function settingsPath(userId: string): string {
+  return path.join(userDir(userId), "ai-settings.json");
+}
+
+export async function loadAISettings(userId: string): Promise<UserAISettings> {
   try {
-    const raw = await fs.readFile(SETTINGS_PATH, "utf8");
-    const parsed = JSON.parse(raw) as Partial<AISettings>;
-    return { ...DEFAULT_SETTINGS, ...parsed };
+    const raw = await fs.readFile(settingsPath(userId), "utf8");
+    return JSON.parse(raw) as UserAISettings;
   } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_SETTINGS;
-    console.warn("[token-store] failed to load ai settings:", (err as Error).message);
-    return DEFAULT_SETTINGS;
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return {};
+    console.warn(`[token-store] failed to load ai settings for ${userId}:`, (err as Error).message);
+    return {};
   }
 }
 
-export async function saveAISettings(settings: AISettings): Promise<void> {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  await fs.writeFile(SETTINGS_PATH, JSON.stringify(settings, null, 2) + "\n", "utf8");
+export async function saveAISettings(userId: string, settings: UserAISettings): Promise<void> {
+  await fs.mkdir(userDir(userId), { recursive: true });
+  await fs.writeFile(settingsPath(userId), JSON.stringify(settings, null, 2) + "\n", "utf8");
 }
 
-export async function setActiveProvider(provider: AIProviderName): Promise<AISettings> {
-  const current = await loadAISettings();
-  const next = { ...current, activeProvider: provider };
-  await saveAISettings(next);
-  return next;
-}
-
-export async function setGeminiModel(model: string | undefined): Promise<AISettings> {
-  const current = await loadAISettings();
+export async function setGeminiModel(userId: string, model: string | undefined): Promise<UserAISettings> {
+  const current = await loadAISettings(userId);
   const next = { ...current, geminiModel: model?.trim() || undefined };
-  await saveAISettings(next);
+  await saveAISettings(userId, next);
   return next;
 }

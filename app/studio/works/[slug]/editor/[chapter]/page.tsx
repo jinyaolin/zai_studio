@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { listChapters, readChapter } from "@/lib/content/chapters";
 import { readWork } from "@/lib/content/works";
 import { normalizeNarration, narrationVoiceString } from "@/lib/tts/narration-server";
 import { decodeParam } from "@/lib/utils/params";
+import { getCurrentUserId } from "@/lib/auth/session";
 import ChapterEditor from "./ChapterEditor";
 
 export const dynamic = "force-dynamic";
@@ -13,23 +14,26 @@ export default async function ChapterEditorPage({
 }: {
   params: { slug: string; chapter: string };
 }) {
+  const userId = await getCurrentUserId();
+  if (!userId) redirect("/studio/login");
+
   const slug = decodeParam(params.slug);
   const chapterSlug = decodeParam(params.chapter);
   let work;
   try {
-    work = await readWork(slug);
+    work = await readWork(userId, slug);
   } catch {
     notFound();
   }
 
   let chapter;
   try {
-    chapter = await readChapter(slug, chapterSlug);
+    chapter = await readChapter(userId, slug, chapterSlug);
   } catch {
     notFound();
   }
 
-  const chapters = await listChapters(slug);
+  const chapters = await listChapters(userId, slug);
   const index = chapters.findIndex((c) => c.slug === chapterSlug);
   const prev = index > 0 ? chapters[index - 1] : null;
   const next = index < chapters.length - 1 ? chapters[index + 1] : null;

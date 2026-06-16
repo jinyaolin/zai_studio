@@ -5,6 +5,7 @@ import { readWork } from "@/lib/content/works";
 import { chunkChapter } from "@/lib/tts/chunker";
 import { ensureChunk, isTTSConfigured } from "@/lib/tts/provider";
 import { normalizeNarration, narrationVoiceString } from "@/lib/tts/narration-server";
+import { getCurrentUserId } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -21,6 +22,9 @@ const Body = z.object({
 //
 // Trigger: chapter publish, manual button, or Design commit to a published work.
 export async function POST(req: NextRequest) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   if (!isTTSConfigured()) {
     return NextResponse.json(
       { error: "TTS not configured" },
@@ -36,7 +40,7 @@ export async function POST(req: NextRequest) {
 
   let work;
   try {
-    work = await readWork(workSlug);
+    work = await readWork(userId, workSlug);
   } catch {
     return NextResponse.json({ error: "work not found" }, { status: 404 });
   }
@@ -45,7 +49,7 @@ export async function POST(req: NextRequest) {
 
   let chapter;
   try {
-    chapter = await readChapter(workSlug, chapterSlug);
+    chapter = await readChapter(userId, workSlug, chapterSlug);
   } catch {
     return NextResponse.json({ error: "chapter not found" }, { status: 404 });
   }
@@ -61,7 +65,7 @@ export async function POST(req: NextRequest) {
     let done = 0;
     for (let i = 0; i < chunks.length; i++) {
       try {
-        await ensureChunk(workSlug, chapterSlug, i, voice, chunks[i], { narration });
+        await ensureChunk(userId, workSlug, chapterSlug, i, voice, chunks[i], { narration });
         done++;
         if (done % 5 === 0) {
           console.log(`[tts:prefetch] ${workSlug}/${chapterSlug}: ${done}/${chunks.length} chunks done`);

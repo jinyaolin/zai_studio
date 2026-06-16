@@ -1,7 +1,7 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { generateStage } from "@/lib/design/generate";
-import { isAIConfigured } from "@/lib/ai/provider";
+import { getCurrentUserId } from "@/lib/auth/session";
 import { decodeParam } from "@/lib/utils/params";
 
 export const dynamic = "force-dynamic";
@@ -18,12 +18,9 @@ export async function POST(
   req: NextRequest,
   { params }: { params: { slug: string; sessionId: string } },
 ) {
-  if (!isAIConfigured()) {
-    return new Response(
-      JSON.stringify({ error: "AI not configured. Set ZAI_API_KEY in .env" }),
-      { status: 503, headers: { "content-type": "application/json" } },
-    );
-  }
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const workSlug = decodeParam(params.slug);
   const sessionId = params.sessionId;
 
@@ -46,7 +43,7 @@ export async function POST(
       send({ type: "meta", stageIndex });
 
       const result = await generateStage(
-        { workSlug, sessionId, stageIndex },
+        { userId, workSlug, sessionId, stageIndex },
         {
           onDelta: (text) => send({ type: "delta", text }),
           signal: abort.signal,

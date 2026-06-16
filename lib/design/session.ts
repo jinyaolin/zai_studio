@@ -33,25 +33,29 @@ export function newSession(args: {
   };
 }
 
-export async function readSession(workSlug: string, sessionId: string): Promise<DesignSession> {
-  const raw = await fs.readFile(designSessionPath(workSlug, sessionId), "utf8");
+export async function readSession(
+  userId: string,
+  workSlug: string,
+  sessionId: string,
+): Promise<DesignSession> {
+  const raw = await fs.readFile(designSessionPath(userId, workSlug, sessionId), "utf8");
   return JSON.parse(raw) as DesignSession;
 }
 
-export async function writeSession(session: DesignSession): Promise<DesignSession> {
+export async function writeSession(userId: string, session: DesignSession): Promise<DesignSession> {
   const updated = { ...session, updatedAt: new Date().toISOString() };
-  await fs.mkdir(designSessionsDir(updated.workSlug), { recursive: true });
+  await fs.mkdir(designSessionsDir(userId, updated.workSlug), { recursive: true });
   await fs.writeFile(
-    designSessionPath(updated.workSlug, updated.id),
+    designSessionPath(userId, updated.workSlug, updated.id),
     JSON.stringify(updated, null, 2) + "\n",
     "utf8",
   );
   return updated;
 }
 
-export async function listSessions(workSlug: string): Promise<DesignSession[]> {
+export async function listSessions(userId: string, workSlug: string): Promise<DesignSession[]> {
   try {
-    const entries = await fs.readdir(designSessionsDir(workSlug));
+    const entries = await fs.readdir(designSessionsDir(userId, workSlug));
     const sessions: DesignSession[] = [];
     for (const file of entries) {
       if (!file.endsWith(".json")) continue;
@@ -59,7 +63,7 @@ export async function listSessions(workSlug: string): Promise<DesignSession[]> {
         sessions.push(
           JSON.parse(
             await fs.readFile(
-              designSessionPath(workSlug, file.replace(/\.json$/, "")),
+              designSessionPath(userId, workSlug, file.replace(/\.json$/, "")),
               "utf8",
             ),
           ) as DesignSession,
@@ -75,33 +79,30 @@ export async function listSessions(workSlug: string): Promise<DesignSession[]> {
   }
 }
 
-// Find the most recent in-progress (not committed) session for a chapter.
-// Used to auto-resume when the author returns to the design page.
-// For `fresh` sessions, we match by chapterSlug=null AND no chapter has been
-// written between sessions — but for simplicity, fresh sessions are NOT auto-
-// resumed (each "new chapter" intent gets its own session, deliberately).
 export async function findOpenSessionForChapter(
+  userId: string,
   workSlug: string,
   chapterSlug: string,
 ): Promise<DesignSession | null> {
-  const all = await listSessions(workSlug);
+  const all = await listSessions(userId, workSlug);
   return (
     all.find((s) => !s.committed && s.chapterSlug === chapterSlug) ?? null
   );
 }
 
-export async function deleteSession(workSlug: string, sessionId: string): Promise<void> {
-  await fs.rm(designSessionPath(workSlug, sessionId), { force: true });
+export async function deleteSession(userId: string, workSlug: string, sessionId: string): Promise<void> {
+  await fs.rm(designSessionPath(userId, workSlug, sessionId), { force: true });
 }
 
 export async function updateStage(
+  userId: string,
   workSlug: string,
   sessionId: string,
   stageIndex: number,
   patch: Partial<DesignStage>,
 ): Promise<DesignSession> {
   if (stageIndex < 0 || stageIndex >= 4) throw new Error("invalid stage index");
-  const session = await readSession(workSlug, sessionId);
+  const session = await readSession(userId, workSlug, sessionId);
   session.stages[stageIndex] = { ...session.stages[stageIndex], ...patch };
-  return writeSession(session);
+  return writeSession(userId, session);
 }

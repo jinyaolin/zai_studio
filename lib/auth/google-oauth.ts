@@ -20,7 +20,10 @@ import { createHash, randomBytes } from "node:crypto";
 
 const GOOGLE_AUTH_BASE = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
-const GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v2/userinfo";
+// OpenID Connect userinfo returns `sub` (subject ID); the older
+// oauth2/v2/userinfo returns `id` instead. We rely on `sub` for a stable
+// per-account key, so use the OIDC endpoint.
+const GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo";
 
 export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/userinfo.email",
@@ -138,7 +141,12 @@ export async function fetchUserInfo(accessToken: string): Promise<GoogleUserInfo
     throw new Error(`userinfo fetch failed (${res.status})`);
   }
   const data = await res.json();
-  return { email: data.email, sub: data.sub };
+  if (!data.sub || !data.email) {
+    throw new Error(
+      `userinfo response missing sub or email (got: ${JSON.stringify(data).slice(0, 200)})`,
+    );
+  }
+  return { email: data.email as string, sub: data.sub as string };
 }
 
 /** True if the access_token has expired (with 60s safety margin). */

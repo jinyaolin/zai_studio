@@ -1,8 +1,9 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { readMemory } from "@/lib/memory/store";
 import { readConversation } from "@/lib/memory/conversations";
-import { getProvider, isAIConfigured } from "@/lib/ai/provider";
+import { getProvider } from "@/lib/ai/provider";
+import { getCurrentUserId } from "@/lib/auth/session";
 import { DISABLE_THINKING_FOR_EXTRACTION } from "@/lib/ai/thinking-policy";
 import { summarizeMemoryForPrompt } from "@/lib/memory/retrieve";
 import { decodeParam } from "@/lib/utils/params";
@@ -20,12 +21,9 @@ const Body = z.object({
 // AI reads the conversation history + current memory, outputs a proposed
 // updated memory object wrapped in <PROPOSAL>{json}</PROPOSAL>.
 export async function POST(req: NextRequest, { params }: { params: { slug: string } }) {
-  if (!isAIConfigured()) {
-    return new Response(
-      JSON.stringify({ error: "AI not configured. Set ZAI_API_KEY in .env" }),
-      { status: 503, headers: { "content-type": "application/json" } },
-    );
-  }
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const workSlug = decodeParam(params.slug);
   const body = await req.json().catch(() => null);
   const parsed = Body.safeParse(body);
@@ -38,7 +36,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
 
   let conversation;
   try {
-    conversation = await readConversation(workSlug, parsed.data.conversationId);
+    conversation = await readConversation(userId, workSlug, parsed.data.conversationId);
   } catch {
     return new Response(JSON.stringify({ error: "conversation not found" }), {
       status: 404,
@@ -46,7 +44,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     });
   }
 
-  const memory = await readMemory(workSlug);
+  const memory = await readMemory(userId, workSlug);
 
   // Render conversation as a transcript the model can read.
   const transcript = conversation.messages
@@ -102,7 +100,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
       send({ type: "meta", conversationId: conversation.id });
 
       let output = "";
-      const provider = await getProvider();
+      const provider = await getProvider(userId);
       try {
         for await (const delta of provider.stream(
           [

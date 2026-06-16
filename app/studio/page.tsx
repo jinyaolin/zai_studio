@@ -1,7 +1,9 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { listWorks } from "@/lib/content/works";
 import { formatDate, formatWordCount } from "@/lib/utils";
 import { queryChaptersByWork } from "@/lib/content/db";
+import { getCurrentUserId } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -13,7 +15,10 @@ const STATUS_LABEL = {
 } as const;
 
 export default async function StudioHomePage() {
-  const works = await listWorks();
+  const userId = await getCurrentUserId();
+  if (!userId) redirect("/studio/login");
+
+  const works = await listWorks(userId);
 
   return (
     <div className="max-w-4xl mx-auto px-8 py-10">
@@ -42,7 +47,7 @@ export default async function StudioHomePage() {
       ) : (
         <ul className="space-y-2">
           {works.map((w) => {
-            const chapterCount = queryChaptersByWork(w.slug).length;
+            const chapterCount = queryChaptersByWork(userId, w.slug).length;
             const status = STATUS_LABEL[w.status];
             return (
               <li key={w.slug}>

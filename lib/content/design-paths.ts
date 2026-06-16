@@ -1,10 +1,11 @@
 import path from "node:path";
-import { workDir } from "./paths";
+import { designSessionsDir as designSessionsDirBase } from "./paths";
 
-export function designSessionsDir(workSlug: string) {
-  return path.join(workDir(workSlug), "design-sessions");
+// Re-export the per-user helper under the same name (now takes userId).
+export function designSessionsDir(userId: string, workSlug: string) {
+  return designSessionsDirBase(userId, workSlug);
 }
 
-export function designSessionPath(workSlug: string, sessionId: string) {
-  return path.join(designSessionsDir(workSlug), `${sessionId}.json`);
+export function designSessionPath(userId: string, workSlug: string, sessionId: string) {
+  return path.join(designSessionsDir(userId, workSlug), `${sessionId}.json`);
 }

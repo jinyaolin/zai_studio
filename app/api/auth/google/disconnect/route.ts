@@ -1,16 +1,14 @@
 import { NextResponse } from "next/server";
-import { clearGoogleTokens, loadAISettings, saveAISettings } from "@/lib/auth/token-store";
+import { clearGoogleTokens } from "@/lib/auth/token-store";
+import { getCurrentUserId } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-// Disconnect: clear stored tokens AND fall back to z.ai so getProvider()
-// doesn't blow up trying to call Gemini with no credentials.
+// Disconnect the current user's Google account. Clears their stored tokens.
 export async function POST() {
-  await clearGoogleTokens();
-  const settings = await loadAISettings();
-  if (settings.activeProvider === "gemini-oauth") {
-    await saveAISettings({ ...settings, activeProvider: "zai" });
-  }
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+  await clearGoogleTokens(userId);
   return NextResponse.json({ ok: true });
 }

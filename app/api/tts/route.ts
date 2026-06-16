@@ -6,6 +6,7 @@ import { chunkChapter } from "@/lib/tts/chunker";
 import { ensureChunk, isTTSConfigured } from "@/lib/tts/provider";
 import { normalizeNarration, narrationVoiceString } from "@/lib/tts/narration-server";
 import type { AudioManifest } from "@/lib/types";
+import { getCurrentUserId } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -19,6 +20,9 @@ const Body = z.object({
 });
 
 export async function POST(req: NextRequest) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   if (!isTTSConfigured()) {
     return NextResponse.json(
       { error: "TTS not configured. Set TTS_API_KEY in .env" },
@@ -35,7 +39,7 @@ export async function POST(req: NextRequest) {
   // Resolve per-work narration → opaque voice string for cache keying.
   let work;
   try {
-    work = await readWork(workSlug);
+    work = await readWork(userId, workSlug);
   } catch {
     return NextResponse.json({ error: "work not found" }, { status: 404 });
   }
@@ -44,7 +48,7 @@ export async function POST(req: NextRequest) {
 
   let chapter;
   try {
-    chapter = await readChapter(workSlug, chapterSlug);
+    chapter = await readChapter(userId, workSlug, chapterSlug);
   } catch {
     return NextResponse.json({ error: "chapter not found" }, { status: 404 });
   }
@@ -56,7 +60,7 @@ export async function POST(req: NextRequest) {
   for (const index of indices) {
     if (index >= chunks.length) continue;
     audioChunks.push(
-      await ensureChunk(workSlug, chapterSlug, index, voice, chunks[index], { narration }),
+      await ensureChunk(userId, workSlug, chapterSlug, index, voice, chunks[index], { narration }),
     );
   }
 

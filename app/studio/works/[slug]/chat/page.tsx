@@ -1,10 +1,11 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { readMemory } from "@/lib/memory/store";
 import { readWork } from "@/lib/content/works";
-import { isAIConfigured, getCurrentModel } from "@/lib/ai/provider";
+import { isAIConfiguredForUser } from "@/lib/ai/provider";
 import { listConversations } from "@/lib/memory/conversations";
 import { decodeParam } from "@/lib/utils/params";
+import { getCurrentUserId } from "@/lib/auth/session";
 import ChatPanel from "./ChatPanel";
 
 export const dynamic = "force-dynamic";
@@ -14,16 +15,19 @@ export default async function ChatPage({
 }: {
   params: { slug: string };
 }) {
+  const userId = await getCurrentUserId();
+  if (!userId) redirect("/studio/login");
+
   const slug = decodeParam(params.slug);
   let work;
   try {
-    work = await readWork(slug);
+    work = await readWork(userId, slug);
   } catch {
     notFound();
   }
-  const memory = await readMemory(slug);
-  const conversations = await listConversations(slug);
-  const aiReady = isAIConfigured();
+  const memory = await readMemory(userId, slug);
+  const conversations = await listConversations(userId, slug);
+  const aiReady = await isAIConfiguredForUser(userId);
   const encoded = encodeURIComponent(slug);
 
   const memoryStats = [
@@ -47,7 +51,7 @@ export default async function ChatPage({
       <header className="mb-6">
         <h1 className="font-serif text-3xl">對話 · {work.title}</h1>
         <div className="flex flex-wrap gap-3 mt-2 text-xs text-stone-500">
-          <span>模型：{aiReady ? getCurrentModel() : "未設定"}</span>
+          <span>模型：{aiReady ? "(gemini)" : "未連結"}</span>
           <span>·</span>
           <span>{memoryStats.join(" · ")}</span>
           <span>·</span>
@@ -60,7 +64,7 @@ export default async function ChatPage({
         </div>
         {!aiReady && (
           <p className="mt-3 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-            尚未設定 <code>ZAI_API_KEY</code>。請參考 <code>.env.example</code>。
+            尚未連結 Google 帳號。請到 <Link href="/studio/settings" className="underline">設定</Link> 頁面進行 OAuth 連結。
           </p>
         )}
       </header>

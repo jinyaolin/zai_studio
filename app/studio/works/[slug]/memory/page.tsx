@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { readMemory } from "@/lib/memory/store";
 import { readWork } from "@/lib/content/works";
 import { decodeParam } from "@/lib/utils/params";
+import { getCurrentUserId } from "@/lib/auth/session";
 import MemoryEditor from "./MemoryEditor";
 
 export const dynamic = "force-dynamic";
@@ -12,13 +13,16 @@ export default async function MemoryPage({
 }: {
   params: { slug: string };
 }) {
+  const userId = await getCurrentUserId();
+  if (!userId) redirect("/studio/login");
+
   const slug = decodeParam(params.slug);
   try {
-    await readWork(slug);
+    await readWork(userId, slug);
   } catch {
     notFound();
   }
-  const memory = await readMemory(slug);
+  const memory = await readMemory(userId, slug);
   const encoded = encodeURIComponent(slug);
 
   return (

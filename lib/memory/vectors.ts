@@ -1,7 +1,6 @@
 import { promises as fs } from "node:fs";
-import path from "node:path";
 import type { Character, PlotThread, WorkMemory, WorldEntry } from "@/lib/types";
-import { memoryDir } from "@/lib/content/paths";
+import { vectorsFilePath } from "@/lib/content/paths";
 import { getEmbeddingProvider } from "@/lib/ai/embeddings";
 import { chunkForEmbedding } from "./chunker";
 
@@ -53,13 +52,13 @@ const EMPTY: VectorFile = {
   chapters: {},
 };
 
-function vectorsPath(workSlug: string): string {
-  return path.join(memoryDir(workSlug), "vectors.json");
+function vectorsPath(userId: string, workSlug: string): string {
+  return vectorsFilePath(userId, workSlug);
 }
 
-async function readVectors(workSlug: string): Promise<VectorFile> {
+async function readVectors(userId: string, workSlug: string): Promise<VectorFile> {
   try {
-    const raw = await fs.readFile(vectorsPath(workSlug), "utf8");
+    const raw = await fs.readFile(vectorsPath(userId, workSlug), "utf8");
     return { ...EMPTY, ...(JSON.parse(raw) as Partial<VectorFile>) };
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return { ...EMPTY };
@@ -67,9 +66,11 @@ async function readVectors(workSlug: string): Promise<VectorFile> {
   }
 }
 
-async function writeVectors(workSlug: string, data: VectorFile): Promise<void> {
-  await fs.mkdir(memoryDir(workSlug), { recursive: true });
-  await fs.writeFile(vectorsPath(workSlug), JSON.stringify(data, null, 2), "utf8");
+async function writeVectors(userId: string, workSlug: string, data: VectorFile): Promise<void> {
+  // Ensure parent dir exists.
+  const { memoryDir } = await import("@/lib/content/paths");
+  await fs.mkdir(memoryDir(userId, workSlug), { recursive: true });
+  await fs.writeFile(vectorsPath(userId, workSlug), JSON.stringify(data, null, 2), "utf8");
 }
 
 // Text we embed for each kind. Compact but distinctive.
@@ -91,11 +92,12 @@ function plotText(p: PlotThread): string {
 // Re-embeds items whose text changed; removes items no longer in memory;
 // passes through items that are unchanged. Safe to call after every write.
 export async function syncVectors(
+  userId: string,
   workSlug: string,
   memory: WorkMemory,
 ): Promise<{ embedded: number; reused: number; removed: number; provider: string }> {
   const provider = getEmbeddingProvider();
-  const prev = await readVectors(workSlug);
+  const prev = await readVectors(userId, workSlug);
 
   // If the provider changed, everything needs to be re-embedded.
   const providerChanged = prev.provider !== provider.name;
@@ -152,7 +154,7 @@ export async function syncVectors(
     Object.keys(prev.plot).filter((id) => !next.plot[id]).length;
 
   if (toEmbed.length === 0 && reused > 0) {
-    await writeVectors(workSlug, next);
+    await writeVectors(userId, workSlug, next);
     return { embedded: 0, reused, removed, provider: provider.name };
   }
 
@@ -168,7 +170,7 @@ export async function syncVectors(
     }
   }
 
-  await writeVectors(workSlug, next);
+  await writeVectors(userId, workSlug, next);
   return { embedded: toEmbed.length, reused, removed, provider: provider.name };
 }
 
@@ -180,12 +182,13 @@ export interface RetrievedItem {
 }
 
 export async function retrieveByQuery(
+  userId: string,
   workSlug: string,
   query: string,
   topK = 6,
 ): Promise<RetrievedItem[]> {
   const provider = getEmbeddingProvider();
-  const data = await readVectors(workSlug);
+  const data = await readVectors(userId, workSlug);
   const [queryVec] = await provider.embed([query]);
 
   const candidates: { kind: RetrievedItem["kind"]; id?: string; vector: number[] }[] = [];
@@ -226,12 +229,13 @@ export interface MatchResult {
 }
 
 export async function findNearestItem(
+  userId: string,
   workSlug: string,
   text: string,
   restrictKind?: "characters" | "worldbuilding" | "plot",
 ): Promise<MatchResult> {
   const provider = getEmbeddingProvider();
-  const data = await readVectors(workSlug);
+  const data = await readVectors(userId, workSlug);
   const [vec] = await provider.embed([text]);
 
   let bestScore = -Infinity;
@@ -268,37 +272,32 @@ export async function findNearestItem(
 // fragments from OTHER chapters (not the current one being written).
 
 export async function syncChapterVectors(
+  userId: string,
   workSlug: string,
   chapterSlug: string,
   title: string,
   content: string,
 ): Promise<{ embedded: number; reused: number; provider: string }> {
   const provider = getEmbeddingProvider();
-  const prev = await readVectors(workSlug);
+  const prev = await readVectors(userId, workSlug);
   const prevChapters = provider.name === prev.provider ? prev.chapters : {};
   const existing = prevChapters[chapterSlug];
 
   const chunks = chunkForEmbedding(content);
 
-  // If text matches what we already have for every chunk, reuse.
   if (
     existing &&
     existing.title === title &&
     existing.chunks.length === chunks.length &&
     chunks.every((c, i) => existing.chunks[i]?.text === c.text)
   ) {
-    // No change. Make sure the chapter is preserved (it might have been dropped
-    // by a memory-only sync if provider changed mid-flight).
     if (prev.chapters !== prevChapters || prev.chapters[chapterSlug] !== existing) {
       const next: VectorFile = { ...prev, provider: provider.name, chapters: { ...prevChapters, [chapterSlug]: existing } };
-      await writeVectors(workSlug, next);
+      await writeVectors(userId, workSlug, next);
     }
     return { embedded: 0, reused: chunks.length, provider: provider.name };
   }
 
-  // Batch-embed all chunks. (For changed chapters, we re-embed the whole chapter
-  // rather than diffing individual chunks — simpler and the cost is bounded by
-  // chapter size, which is bounded by max_tokens.)
   const texts = chunks.map((c) => c.text);
   const vectors = texts.length > 0 ? await provider.embed(texts) : [];
   const newEntry: ChapterEntry = {
@@ -311,30 +310,29 @@ export async function syncChapterVectors(
     provider: provider.name,
     chapters: { ...prevChapters, [chapterSlug]: newEntry },
   };
-  await writeVectors(workSlug, next);
+  await writeVectors(userId, workSlug, next);
   return { embedded: chunks.length, reused: 0, provider: provider.name };
 }
 
-export async function removeChapterVectors(workSlug: string, chapterSlug: string): Promise<void> {
-  const prev = await readVectors(workSlug);
+export async function removeChapterVectors(userId: string, workSlug: string, chapterSlug: string): Promise<void> {
+  const prev = await readVectors(userId, workSlug);
   if (!(chapterSlug in prev.chapters)) return;
   const next: VectorFile = {
     ...prev,
     chapters: { ...prev.chapters },
   };
   delete next.chapters[chapterSlug];
-  await writeVectors(workSlug, next);
+  await writeVectors(userId, workSlug, next);
 }
 
-// Move a chapter's vector entry from old slug to new slug (used when a draft
-// chapter is renamed to keep its URL in sync with its title).
 export async function renameChapterVectorsKey(
+  userId: string,
   workSlug: string,
   oldSlug: string,
   newSlug: string,
 ): Promise<void> {
   if (oldSlug === newSlug) return;
-  const prev = await readVectors(workSlug);
+  const prev = await readVectors(userId, workSlug);
   const entry = prev.chapters[oldSlug];
   if (!entry) return;
   const nextChapters: Record<string, ChapterEntry> = {};
@@ -342,7 +340,7 @@ export async function renameChapterVectorsKey(
     if (k === oldSlug) nextChapters[newSlug] = v;
     else nextChapters[k] = v;
   }
-  await writeVectors(workSlug, { ...prev, chapters: nextChapters });
+  await writeVectors(userId, workSlug, { ...prev, chapters: nextChapters });
 }
 
 export interface RetrievedChunk {
@@ -356,13 +354,14 @@ export interface RetrievedChunk {
 // Find top-K chapter chunks across the work (optionally excluding one chapter).
 // Used to inject "relevant past content" context when writing/editing a chapter.
 export async function retrieveChapterChunks(
+  userId: string,
   workSlug: string,
   query: string,
   options?: { excludeChapter?: string; topK?: number },
 ): Promise<RetrievedChunk[]> {
   const topK = options?.topK ?? 4;
   const provider = getEmbeddingProvider();
-  const data = await readVectors(workSlug);
+  const data = await readVectors(userId, workSlug);
   const [queryVec] = await provider.embed([query]);
 
   const candidates: {

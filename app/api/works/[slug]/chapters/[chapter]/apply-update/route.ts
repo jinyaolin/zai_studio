@@ -3,6 +3,7 @@ import { z } from "zod";
 import { applyChapterUpdate } from "@/lib/content/chapters";
 import { syncWork } from "@/lib/content/sync";
 import { decodeParam } from "@/lib/utils/params";
+import { getCurrentUserId } from "@/lib/auth/session";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,9 @@ const Body = z.object({
 // Applies a chapter update while snapshotting the current content first.
 // Used by: chapter discussion "採用" button, design-session commit, restore.
 export async function POST(req: NextRequest, { params }: { params: { slug: string; chapter: string } }) {
+  const userId = await getCurrentUserId();
+  if (!userId) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
   const slug = decodeParam(params.slug);
   const chapterSlug = decodeParam(params.chapter);
   const body = await req.json().catch(() => null);
@@ -25,6 +29,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
   }
   const { content, title, status, reason } = parsed.data;
   const result = await applyChapterUpdate(
+    userId,
     slug,
     chapterSlug,
     {
@@ -34,7 +39,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
     },
     reason ?? "ai-edit",
   );
-  await syncWork(slug);
+  await syncWork(userId, slug);
   const { renamedTo, ...chapter } = result;
   return NextResponse.json({ chapter, renamedTo: renamedTo ?? null });
 }

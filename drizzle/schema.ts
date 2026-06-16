@@ -43,11 +43,5 @@ export const conversations = sqliteTable("conversations", {
   updatedAt: text("updated_at").notNull(),
 });
 
-// ─── Full-text search over chapter content ────────────────────────
-// FTS5 virtual table; kept in sync with chapter file bodies.
-export const chaptersFts = sqliteTable("chapters_fts", {
-  workSlug: text("work_slug"),
-  chapterSlug: text("chapter_slug"),
-  title: text("title"),
-  content: text("content"),
-});
+// (chapters_fts FTS5 table removed — searchChapters was dead code; will be
+// re-added with proper user-scoping when search UI is built.)

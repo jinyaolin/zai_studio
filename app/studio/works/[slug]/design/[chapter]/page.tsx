@@ -1,9 +1,10 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { listChapters, readChapter } from "@/lib/content/chapters";
 import { readWork } from "@/lib/content/works";
 import { findOpenSessionForChapter, readSession, writeSession } from "@/lib/design/session";
 import { decodeParam } from "@/lib/utils/params";
+import { getCurrentUserId } from "@/lib/auth/session";
 import DesignWizard from "./DesignWizard";
 
 export const dynamic = "force-dynamic";
@@ -15,12 +16,15 @@ export default async function DesignPage({
   params: { slug: string; chapter: string };
   searchParams: { session?: string; fresh?: string };
 }) {
+  const userId = await getCurrentUserId();
+  if (!userId) redirect("/studio/login");
+
   const slug = decodeParam(params.slug);
   const chapterParam = decodeParam(params.chapter);
 
   let work;
   try {
-    work = await readWork(slug);
+    work = await readWork(userId, slug);
   } catch {
     notFound();
   }
@@ -29,13 +33,13 @@ export default async function DesignPage({
   let chapter = null;
   if (!isNew) {
     try {
-      chapter = await readChapter(slug, chapterParam);
+      chapter = await readChapter(userId, slug, chapterParam);
     } catch {
       notFound();
     }
   }
 
-  const chapters = await listChapters(slug);
+  const chapters = await listChapters(userId, slug);
   const encoded = encodeURIComponent(slug);
 
   // Auto-resume: if there's an open (non-committed) session for this chapter,
@@ -46,13 +50,13 @@ export default async function DesignPage({
   if (chapter && !searchParams.fresh) {
     if (searchParams.session) {
       try {
-        const s = await readSession(slug, searchParams.session);
+        const s = await readSession(userId, slug, searchParams.session);
         if (!s.committed && s.chapterSlug === chapter.slug) resumeSession = s;
       } catch {
         // invalid session id — ignore
       }
     } else {
-      resumeSession = await findOpenSessionForChapter(slug, chapter.slug);
+      resumeSession = await findOpenSessionForChapter(userId, slug, chapter.slug);
     }
   }
 
@@ -68,7 +72,7 @@ export default async function DesignPage({
     resumeSession.autoStatus = "failed";
     resumeSession.autoError = "背景執行超時（超過 10 分鐘沒有進度）。可能 server 重啟了。";
     resumeSession.autoFinishedAt = new Date().toISOString();
-    await writeSession(resumeSession);
+    await writeSession(userId, resumeSession);
   }
 
   return (

@@ -3,6 +3,7 @@ import { summarizeMemoryForPrompt } from "@/lib/memory/retrieve";
 import { retrieveChapterChunks } from "@/lib/memory/vectors";
 
 interface BuildArgs {
+  userId: string;
   workSlug: string;
   workTitle: string;
   memory: WorkMemory;
@@ -97,7 +98,7 @@ const STAGE_INSTRUCTIONS: Record<DesignStageName, string> = {
 // chapters via the vector index — keeps long works coherent without bloating
 // every prompt with the full text of every prior chapter.
 export async function buildStagePrompt(args: BuildArgs): Promise<{ system: string; user: string }> {
-  const { workSlug, workTitle, memory, chapter, previousChapter, session, stage } = args;
+  const { userId, workSlug, workTitle, memory, chapter, previousChapter, session, stage } = args;
 
   const parts: string[] = [
     `你是《${workTitle}》的共同作者。我們正在用 Design Thinking 工作流處理一章。`,
@@ -138,7 +139,7 @@ export async function buildStagePrompt(args: BuildArgs): Promise<{ system: strin
     try {
       const query = [session.goal, chapter?.title, previousChapter?.title].filter(Boolean).join(" / ");
       const exclude = chapter?.slug;
-      const chunks = await retrieveChapterChunks(workSlug, query, { excludeChapter: exclude, topK: 4 });
+      const chunks = await retrieveChapterChunks(userId, workSlug, query, { excludeChapter: exclude, topK: 4 });
       if (chunks.length > 0) {
         parts.push("", `── 與這次目標語意相關的前情片段（從前幾章檢索，僅供連戲參考）──`);
         for (const c of chunks) {
