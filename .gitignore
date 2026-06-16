@@ -18,6 +18,9 @@ next-env.d.ts
 /data/
 /public/audio/
 
+# per-user content (multi-user runtime data, not source code)
+/content/users/
+
 # system
 .DS_Store
 *.pem

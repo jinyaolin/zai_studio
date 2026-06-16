@@ -32,7 +32,15 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
-  const work = await createWork(userId, parsed.data);
-  await syncWork(userId, work.slug);
-  return NextResponse.json({ work }, { status: 201 });
+  try {
+    const work = await createWork(userId, parsed.data);
+    await syncWork(userId, work.slug);
+    return NextResponse.json({ work }, { status: 201 });
+  } catch (err) {
+    console.error("[works/create] failed:", (err as Error).message);
+    return NextResponse.json(
+      { error: (err as Error).message || "建立失敗" },
+      { status: 500 },
+    );
+  }
 }
