@@ -158,7 +158,7 @@ export async function POST(req: NextRequest) {
 
         // Stream tokens
         let assistantText = "";
-        const provider = getProvider();
+        const provider = await getProvider();
         const spec = CHAT_MODES[mode];
         // Per-call thinking policy:
         //   - chapter scope writes prose / proposals → keep reasoning on

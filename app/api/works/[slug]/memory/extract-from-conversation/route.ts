@@ -102,7 +102,7 @@ export async function POST(req: NextRequest, { params }: { params: { slug: strin
       send({ type: "meta", conversationId: conversation.id });
 
       let output = "";
-      const provider = getProvider();
+      const provider = await getProvider();
       try {
         for await (const delta of provider.stream(
           [

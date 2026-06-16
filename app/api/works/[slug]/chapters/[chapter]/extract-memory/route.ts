@@ -54,7 +54,7 @@ export async function POST(_req: NextRequest, { params }: { params: { slug: stri
       send({ type: "meta" });
 
       let output = "";
-      const provider = getProvider();
+      const provider = await getProvider();
       try {
         for await (const delta of provider.stream(
           [

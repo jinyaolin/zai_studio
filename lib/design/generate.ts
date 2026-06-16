@@ -88,7 +88,7 @@ export async function generateStage(
   });
 
   let output = "";
-  const provider = getProvider();
+  const provider = await getProvider();
   const temperature = stageName === "draft" ? 0.85 : 0.7;
   const disableThinking = disableThinkingForDesignStage(stageName);
   try {
